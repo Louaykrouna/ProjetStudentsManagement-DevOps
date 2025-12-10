@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         // NE PAS mettre le token ici! Utiliser Jenkins Credentials
-        DOCKER_HUB_USERNAME = 'louaykrouna'  // OK - c'est public
+        DOCKER_HUB_USERNAME = 'louway'  // OK - c'est public
         DOCKER_HUB_REPO = "${DOCKER_HUB_USERNAME}/students-management"
         IMAGE_TAG = "build-${BUILD_NUMBER}"
     }
