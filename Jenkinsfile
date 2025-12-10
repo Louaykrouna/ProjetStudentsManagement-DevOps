@@ -19,27 +19,21 @@ pipeline {
         stage('Build Backend') {
             steps {
                 echo '===== Compilation du backend Spring Boot ====='
-                dir('backend') {
-                    sh 'mvn clean compile -DskipTests'
-                }
+                sh 'mvn clean compile -DskipTests'
             }
         }
         
         stage('Test Backend') {
             steps {
                 echo '===== Exécution des tests ====='
-                dir('backend') {
-                    sh 'mvn test'
-                }
+                sh 'mvn test'
             }
         }
         
         stage('Package Backend') {
             steps {
                 echo '===== Création du JAR ====='
-                dir('backend') {
-                    sh 'mvn package -DskipTests'
-                }
+                sh 'mvn package -DskipTests'
             }
         }
         
@@ -47,10 +41,8 @@ pipeline {
             steps {
                 echo '===== Construction de l\'image Docker ====='
                 script {
-                    dir('backend') {
-                        sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
-                        sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
-                    }
+                    sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
+                    sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
                 }
             }
         }
@@ -62,7 +54,7 @@ pipeline {
                     withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', 
                                                       usernameVariable: 'DOCKER_USER', 
                                                       passwordVariable: 'DOCKER_PASS')]) {
-                        sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
+                        sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
                         sh "docker push ${DOCKER_IMAGE}:${DOCKER_TAG}"
                         sh "docker push ${DOCKER_IMAGE}:latest"
                     }
