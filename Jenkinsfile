@@ -5,14 +5,10 @@ pipeline {
         DOCKER_HUB_USERNAME = 'louway'
         DOCKER_HUB_REPO = "${DOCKER_HUB_USERNAME}/students-management"
         IMAGE_TAG = "build-${BUILD_NUMBER}"
-        // Tag avec timestamp pour plus de granularité
-        TIMESTAMP_TAG = "build-${BUILD_NUMBER}-${sh(returnStdout: true, script: 'date +%Y%m%d-%H%M%S').trim()}"
     }
 
     options {
-        // Timeout après 30 minutes
         timeout(time: 30, unit: 'MINUTES')
-        // Nettoyer après le build (option alternative)
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
@@ -61,6 +57,10 @@ pipeline {
                     echo "Branche détectée: ${env.BRANCH_NAME}"
                     echo "Is Master: ${env.IS_MASTER_BRANCH}"
                     echo "Is Develop: ${env.IS_DEVELOP_BRANCH}"
+                    
+                    // Créer un tag avec timestamp
+                    def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
+                    env.TIMESTAMP_TAG = "build-${BUILD_NUMBER}-${timestamp}"
                 }
             }
         }
@@ -84,23 +84,6 @@ pipeline {
                                     -Dspring.profiles.active=test
                         '''
                     }
-                }
-            }
-        }
-
-        stage('Quality Checks') {
-            when {
-                expression { !params.SKIP_TESTS }
-            }
-            steps {
-                script {
-                    echo "===== Vérifications qualité ====="
-                    
-                    // Exécuter les tests unitaires
-                    sh 'mvn test -Dspring.profiles.active=test'
-                    
-                    // Exécuter les tests d'intégration si configurés
-                    sh 'mvn verify -DskipITs=false || echo "⚠️ Tests d\'intégration non disponibles"'
                 }
             }
         }
@@ -130,18 +113,18 @@ pipeline {
                     // Préparer les tags
                     def tags = [
                         "${DOCKER_HUB_REPO}:${IMAGE_TAG}",
-                        "${DOCKER_HUB_REPO}:${TIMESTAMP_TAG}",
+                        "${DOCKER_HUB_REPO}:${env.TIMESTAMP_TAG}",
                         "${DOCKER_HUB_REPO}:commit-${env.COMMIT_HASH}"
                     ]
                     
                     // Ajouter le tag latest si c'est la branche master
-                    if (env.IS_MASTER_BRANCH == 'true') {
+                    if (env.IS_MASTER_BRANCH.toString() == 'true') {
                         tags.add("${DOCKER_HUB_REPO}:latest")
                         echo "✅ Ajout du tag 'latest' (branche master)"
                     }
                     
                     // Ajouter le tag develop si c'est la branche develop
-                    if (env.IS_DEVELOP_BRANCH == 'true') {
+                    if (env.IS_DEVELOP_BRANCH.toString() == 'true') {
                         tags.add("${DOCKER_HUB_REPO}:develop")
                         echo "✅ Ajout du tag 'develop' (branche develop)"
                     }
@@ -187,40 +170,34 @@ pipeline {
                 script {
                     // Vérifier si les credentials existent
                     def dockerHubCredential = 'docker-hub-token'
-                    def hasCredential = false
                     
-                    try {
-                        withCredentials([string(credentialsId: dockerHubCredential, variable: 'TOKEN')]) {
-                            hasCredential = true
+                    // Tentative de connexion avec les credentials
+                    withCredentials([string(credentialsId: dockerHubCredential, variable: 'DOCKER_TOKEN')]) {
+                        // Tentative avec retry en cas d'erreur réseau
+                        retry(3) {
+                            sh """
+                                set +x  # Désactiver le debug pour le token
+                                echo "🔐 Connexion à Docker Hub..."
+                                echo "\${DOCKER_TOKEN}" | docker login --username ${DOCKER_HUB_USERNAME} --password-stdin
+                                set -x  # Réactiver le debug
+                                
+                                echo "📤 Pushing images..."
+                                
+                                # Pousser toutes les images taggées
+                                for tag in ${env.DOCKER_TAGS}; do
+                                    echo "Pushing \${tag}..."
+                                    docker push \${tag}
+                                    echo "✅ \${tag} poussé avec succès"
+                                done
+                                
+                                docker logout
+                                echo "✅ Toutes les images ont été poussées avec succès!"
+                            """
                         }
-                    } catch (Exception e) {
-                        echo "⚠️ Credential '${dockerHubCredential}' non trouvé"
-                    }
-                    
-                    if (hasCredential) {
-                        withCredentials([string(credentialsId: dockerHubCredential, variable: 'DOCKER_TOKEN')]) {
-                            // Tentative avec retry en cas d'erreur réseau
-                            retry(3) {
-                                sh """
-                                    echo "🔐 Connexion à Docker Hub..."
-                                    echo "\${DOCKER_TOKEN}" | docker login --username ${DOCKER_HUB_USERNAME} --password-stdin
-                                    
-                                    echo "📤 Pushing images..."
-                                    
-                                    # Pousser toutes les images taggées
-                                    for tag in $(echo '${env.DOCKER_TAGS}' | tr ',' ' '); do
-                                        echo "Pushing \$tag..."
-                                        docker push \$tag
-                                        echo "✅ \$tag poussé avec succès"
-                                    done
-                                    
-                                    docker logout
-                                    echo "✅ Toutes les images ont été poussées avec succès!"
-                                """
-                            }
-                            
-                            // Créer un webhook ou notifier (optionnel)
-                            echo "🎯 URLs des images Docker Hub:"
+                        
+                        // Afficher les URLs Docker Hub
+                        echo "🎯 URLs des images Docker Hub:"
+                        script {
                             env.DOCKER_TAGS.split(',').each { tag ->
                                 def parts = tag.split(':')
                                 if (parts.length >= 2) {
@@ -230,19 +207,6 @@ pipeline {
                                 }
                             }
                         }
-                    } else {
-                        echo "⚠️ Push Docker Hub non effectué - credentials manquants"
-                        echo "ℹ️ Pour configurer:"
-                        echo "1. Allez dans Jenkins → Manage Jenkins → Credentials"
-                        echo "2. Ajoutez un credential 'docker-hub-token' (Secret text)"
-                        echo "3. Collez votre PAT Docker Hub"
-                        
-                        // Sauvegarder l'image dans un tar (fallback)
-                        sh """
-                            echo "💾 Sauvegarde de l'image localement..."
-                            docker save -o /tmp/students-management-${IMAGE_TAG}.tar ${DOCKER_HUB_REPO}:${IMAGE_TAG}
-                            ls -lh /tmp/students-management-${IMAGE_TAG}.tar
-                        """
                     }
                 }
             }
@@ -289,8 +253,9 @@ pipeline {
             }
         }
         failure {
-            echo '❌ Pipeline échouée'
             script {
+                echo '❌ Pipeline échouée'
+                
                 // Logs de débogage
                 sh '''
                     echo "=== Logs de build ==="
