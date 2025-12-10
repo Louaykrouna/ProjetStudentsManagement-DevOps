@@ -12,60 +12,39 @@ pipeline {
 
         stage('Build Backend') {
             steps {
-                echo "===== Build backend ====="
-                sh 'cd BackendSpring && mvn clean install -DskipTests'
+                echo "===== Build Backend ====="
+                sh 'mvn clean install -DskipTests'
             }
         }
 
         stage('Test Backend') {
             steps {
                 echo "===== Tests Backend ====="
-                sh 'cd BackendSpring && mvn test'
-            }
-        }
-
-        stage('Build Frontend') {
-            steps {
-                echo "===== Build Frontend Angular ====="
-                sh '''
-                    cd Frontend
-                    npm install
-                    npm run build
-                '''
-            }
-        }
-
-        stage('Test Frontend') {
-            steps {
-                echo "===== Tests Frontend Angular ====="
-                sh '''
-                    cd Frontend
-                    npm test --force
-                '''
+                sh 'mvn test'
             }
         }
 
         stage('Packaging') {
             steps {
-                echo "===== Packaging du Backend (JAR) ====="
-                sh 'cd BackendSpring && mvn package -DskipTests'
+                echo "===== Packaging (JAR) ====="
+                sh 'mvn package -DskipTests'
             }
         }
 
         stage('Deploy') {
             steps {
-                echo "===== Simulation Déploiement ====="
-                sh 'echo "Déploiement terminé !"'
+                echo "===== Simulation déploiement ====="
+                sh 'echo Application prête à être déployée !'
             }
         }
     }
 
     post {
         success {
-            echo "🎉 Pipeline exécutée avec succès !"
+            echo '🎉 Pipeline exécutée avec succès !'
         }
         failure {
-            echo "❌ Pipeline échouée, vérifier les logs."
+            echo '❌ Pipeline échouée, vérifier les logs.'
         }
     }
 }
