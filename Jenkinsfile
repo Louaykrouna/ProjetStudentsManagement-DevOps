@@ -16,12 +16,13 @@ pipeline {
             }
         }
         
-        stage('Build Backend') {
-            steps {
-                echo '===== Compilation du backend Spring Boot ====='
-                sh 'mvn clean compile -DskipTests'
+    stage('Test Backend') {
+        steps {
+            echo '===== Exécution des tests ====='
+            sh 'mvn test -Dspring.profiles.active=test'
             }
         }
+
         
         stage('Test Backend') {
             steps {
