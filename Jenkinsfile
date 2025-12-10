@@ -1,90 +1,77 @@
 pipeline {
     agent any
-    
-    environment {
-        JAVA_HOME = '/usr/lib/jvm/java-17-openjdk-amd64'
-        PATH = "${JAVA_HOME}/bin:${env.PATH}"
-        DOCKER_IMAGE = "louaykrouna/students-management"
-        DOCKER_TAG = "${BUILD_NUMBER}"
+
+    tools {
+        maven 'Maven3'  // si tu as configuré Maven dans Jenkins
+        jdk 'JDK17'      // si tu as configuré Java dans Jenkins
+        nodejs 'Node18'  // si tu as configuré NodeJS dans Jenkins
     }
-    
+
     stages {
-        stage('Checkout') {
+
+        stage('Checkout Source Code') {
             steps {
-                echo '===== Récupération du code source ====='
-                checkout scm
-            }
-        }
-        
-    stage('Test Backend') {
-        steps {
-            echo '===== Exécution des tests ====='
-            sh 'mvn test -Dspring.profiles.active=test'
+                git branch: 'main', url: 'https://github.com/Louaykrouna/ProjetStudentsManagement-DevOps.git'
             }
         }
 
-        
-        stage('Test Backend') {
+        stage('Build Backend') {
             steps {
-                echo '===== Exécution des tests ====='
-                sh 'mvn test'
+                echo "Building Backend..."
+                sh 'cd BackendSpring && mvn clean install -DskipTests'
             }
         }
-        
-        stage('Package Backend') {
+
+        stage('Test Backend Unit') {
             steps {
-                echo '===== Création du JAR ====='
-                sh 'mvn package -DskipTests'
+                echo "Running Unit Tests for Backend..."
+                sh 'cd BackendSpring && mvn test'
             }
         }
-        
-        stage('Build Docker Image') {
+
+        stage('Build Frontend') {
             steps {
-                echo '===== Construction de l\'image Docker ====='
-                script {
-                    sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
-                    sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
-                }
+                echo "Building Frontend..."
+                sh '''
+                cd Frontend
+                npm install
+                npm run build
+                '''
             }
         }
-        
-        stage('Push to Docker Hub') {
+
+        stage('Test Frontend') {
             steps {
-                echo '===== Push de l\'image sur Docker Hub ====='
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', 
-                                                      usernameVariable: 'DOCKER_USER', 
-                                                      passwordVariable: 'DOCKER_PASS')]) {
-                        sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
-                        sh "docker push ${DOCKER_IMAGE}:${DOCKER_TAG}"
-                        sh "docker push ${DOCKER_IMAGE}:latest"
-                    }
-                }
+                echo "Running Frontend Tests..."
+                sh '''
+                cd Frontend
+                npm test --force
+                '''
             }
         }
-        
-        stage('Deploy to Kubernetes') {
+
+        stage('Packaging') {
             steps {
-                echo '===== Déploiement sur Kubernetes ====='
-                script {
-                    sh "kubectl apply -f k8s/mysql-deployment.yaml"
-                    sh "kubectl apply -f k8s/backend-deployment.yaml"
-                    sh "kubectl get pods -n devops"
-                }
+                echo "Packaging artifacts..."
+                sh 'cd BackendSpring && mvn package -DskipTests'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                echo "Deployment step..."
+                // Simuler déploiement:
+                sh 'echo "Deploying.... done!"'
             }
         }
     }
-    
+
     post {
         success {
-            echo '✅ Pipeline exécuté avec succès !'
+            echo 'Pipeline executed successfully!'
         }
         failure {
-            echo '❌ Le pipeline a échoué !'
-        }
-        always {
-            echo '===== Nettoyage des images Docker locales ====='
-            sh "docker rmi ${DOCKER_IMAGE}:${DOCKER_TAG} || true"
+            echo 'Pipeline failed. Please check logs.'
         }
     }
 }
