@@ -6,7 +6,7 @@ pipeline {
         stage('Checkout Source Code') {
             steps {
                 echo '===== Checkout du code ====='
-                git branch: 'main', url: 'https://github.com/Louaykrouna/ProjetStudentsManagement-DevOps.git'
+                git branch: 'master', url: 'https://github.com/Louaykrouna/ProjetStudentsManagement-DevOps.git'
             }
         }
 
