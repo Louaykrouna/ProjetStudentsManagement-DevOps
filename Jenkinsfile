@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    environment {
+        DOCKER_IMAGE = "louaykrouna/students-management"
+        DOCKER_TAG = "${BUILD_NUMBER}"
+    }
+
     stages {
 
         stage('Checkout Source Code') {
@@ -17,24 +22,37 @@ pipeline {
             }
         }
 
-        stage('Test Backend') {
+        stage('Package App') {
             steps {
-                echo "===== Tests Backend ====="
-                sh 'mvn test'
-            }
-        }
-
-        stage('Packaging') {
-            steps {
-                echo "===== Packaging (JAR) ====="
+                echo "===== Packaging JAR ====="
                 sh 'mvn package -DskipTests'
             }
         }
 
-        stage('Deploy') {
+        stage('Build Docker Image') {
             steps {
-                echo "===== Simulation déploiement ====="
-                sh 'echo Application prête à être déployée !'
+                echo "===== 🚧 Construction image Docker ====="
+                script {
+                    sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
+                    sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                echo "===== 🚀 Push image vers Docker Hub ====="
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-cred',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
+                        sh "docker push ${DOCKER_IMAGE}:${DOCKER_TAG}"
+                        sh "docker push ${DOCKER_IMAGE}:latest"
+                    }
+                }
             }
         }
     }
@@ -43,8 +61,9 @@ pipeline {
         success {
             echo '🎉 Pipeline exécutée avec succès !'
         }
-        failure {
-            echo '❌ Pipeline échouée, vérifier les logs.'
+        always {
+            echo '🧹 Nettoyage image docker locale'
+            sh "docker rmi ${DOCKER_IMAGE}:${DOCKER_TAG} || true"
         }
     }
 }
