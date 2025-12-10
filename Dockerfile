@@ -1,38 +1,20 @@
-# Étape 1 : Build avec Maven
-FROM maven:3.9-eclipse-temurin-17 AS build
+# Image Alpine avec Java (comme le workshop)
+FROM alpine:latest
 
+# Installer Java 17 et Maven (tout en un)
+RUN apk add --no-cache openjdk17 maven
+
+# Définir le répertoire de travail
 WORKDIR /app
 
-# Copier pom.xml
-COPY pom.xml .
-
-# Télécharger les dépendances
-RUN mvn dependency:go-offline -B
-
-# Copier le code source
-COPY src ./src
+# Copier tout le projet
+COPY . .
 
 # Construire l'application
 RUN mvn clean package -DskipTests
 
-# Étape 2 : Image finale légère
-FROM eclipse-temurin:17-jre-alpine
-
-WORKDIR /app
-
-# Copier le JAR depuis l'étape de build
-COPY --from=build /app/target/*.jar app.jar
-
 # Exposer le port
 EXPOSE 8080
 
-# Variables d'environnement par défaut
-ENV SPRING_PROFILES_ACTIVE=prod
-ENV DB_HOST=mysql-service
-ENV DB_PORT=3306
-ENV DB_NAME=students_db
-ENV DB_USER=root
-ENV DB_PASSWORD=rootpass
-
 # Lancer l'application
-ENTRYPOINT ["java", "-jar", "app.jar"]
+CMD ["java", "-jar", "target/*.jar"]
