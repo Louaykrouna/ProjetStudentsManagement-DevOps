@@ -6,17 +6,15 @@ pipeline {
         DOCKER_HUB_REPO = "${DOCKER_HUB_USERNAME}/students-management"
         IMAGE_TAG = "build-${BUILD_NUMBER}"
         // Tag avec timestamp pour plus de granularité
-        TIMESTAMP_TAG = "build-${BUILD_NUMBER}-${new Date().format('yyyyMMdd-HHmmss')}"
-        // Vérifier si on est sur une branche spécifique
-        IS_MASTER_BRANCH = "${env.BRANCH_NAME}" == 'master'
-        IS_DEVELOP_BRANCH = "${env.BRANCH_NAME}" == 'develop'
+        TIMESTAMP_TAG = "build-${BUILD_NUMBER}-${sh(returnStdout: true, script: 'date +%Y%m%d-%H%M%S').trim()}"
     }
 
     options {
         // Timeout après 30 minutes
         timeout(time: 30, unit: 'MINUTES')
-        // Nettoyer l'espace de travail après le build
-        cleanWs()
+        // Nettoyer après le build (option alternative)
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     parameters {
@@ -47,8 +45,22 @@ pipeline {
                 sh 'git rev-parse --short HEAD > commit_hash.txt'
                 script {
                     env.COMMIT_HASH = readFile('commit_hash.txt').trim()
-                    env.BRANCH_NAME = env.GIT_BRANCH?.replace('origin/', '') ?: 'master'
-                    echo "Commit: ${COMMIT_HASH}, Branche: ${BRANCH_NAME}"
+                    echo "Commit: ${env.COMMIT_HASH}"
+                }
+            }
+        }
+
+        stage('Initialize Variables') {
+            steps {
+                script {
+                    // Déterminer la branche
+                    env.BRANCH_NAME = env.GIT_BRANCH ? env.GIT_BRANCH.replace('origin/', '') : 'master'
+                    env.IS_MASTER_BRANCH = (env.BRANCH_NAME == 'master')
+                    env.IS_DEVELOP_BRANCH = (env.BRANCH_NAME == 'develop')
+                    
+                    echo "Branche détectée: ${env.BRANCH_NAME}"
+                    echo "Is Master: ${env.IS_MASTER_BRANCH}"
+                    echo "Is Develop: ${env.IS_DEVELOP_BRANCH}"
                 }
             }
         }
@@ -89,12 +101,6 @@ pipeline {
                     
                     // Exécuter les tests d'intégration si configurés
                     sh 'mvn verify -DskipITs=false || echo "⚠️ Tests d\'intégration non disponibles"'
-                    
-                    // Vérifier la qualité du code (optionnel)
-                    sh 'mvn checkstyle:check || echo "⚠️ Checkstyle non configuré"'
-                    
-                    // Analyse des dépendances (optionnel)
-                    sh 'mvn dependency:analyze || echo "⚠️ Analyse des dépendances non disponible"'
                 }
             }
         }
@@ -110,8 +116,6 @@ pipeline {
                     ls -la target/*.jar
                     echo "=== Taille du JAR ==="
                     du -h target/*.jar | tail -1
-                    echo "=== Informations JAR ==="
-                    java -jar target/*.jar --version 2>/dev/null || echo "Version non disponible"
                 '''
                 
                 // Archive le JAR
@@ -127,18 +131,23 @@ pipeline {
                     def tags = [
                         "${DOCKER_HUB_REPO}:${IMAGE_TAG}",
                         "${DOCKER_HUB_REPO}:${TIMESTAMP_TAG}",
-                        "${DOCKER_HUB_REPO}:commit-${COMMIT_HASH}"
+                        "${DOCKER_HUB_REPO}:commit-${env.COMMIT_HASH}"
                     ]
                     
                     // Ajouter le tag latest si c'est la branche master
-                    if (IS_MASTER_BRANCH) {
+                    if (env.IS_MASTER_BRANCH == 'true') {
                         tags.add("${DOCKER_HUB_REPO}:latest")
+                        echo "✅ Ajout du tag 'latest' (branche master)"
                     }
                     
                     // Ajouter le tag develop si c'est la branche develop
-                    if (IS_DEVELOP_BRANCH) {
+                    if (env.IS_DEVELOP_BRANCH == 'true') {
                         tags.add("${DOCKER_HUB_REPO}:develop")
+                        echo "✅ Ajout du tag 'develop' (branche develop)"
                     }
+                    
+                    // Afficher tous les tags
+                    echo "Tags à construire: ${tags.join(', ')}"
                     
                     // Construire avec tous les tags
                     def dockerBuildCmd = "docker build"
@@ -150,17 +159,14 @@ pipeline {
                     sh """
                         echo "=== Informations Docker ==="
                         docker version
-                        docker info | grep -E "Containers|Images|Storage"
                         
-                        echo "=== Construction de l\'image avec tags ==="
-                        echo "Tags: ${tags.join(', ')}"
+                        echo "=== Construction de l\'image ==="
                         ${dockerBuildCmd}
                         
                         echo "=== Images créées ==="
-                        docker images ${DOCKER_HUB_REPO} --format "table {{.Tag}}\\t{{.Size}}\\t{{.CreatedAt}}"
+                        docker images ${DOCKER_HUB_REPO}
                         
-                        echo "=== Scan de sécurité (basique) ==="
-                        docker scan ${DOCKER_HUB_REPO}:${IMAGE_TAG} || echo "⚠️ Docker Scan non disponible"
+                        echo "✅ Images Docker construites avec succès"
                     """
                     
                     // Sauvegarder les tags dans l'environnement
@@ -173,95 +179,82 @@ pipeline {
         stage('Push to Docker Hub') {
             when {
                 expression { 
-                    params.PUSH_TO_REGISTRY && 
-                    credentials('docker-hub-token') 
+                    params.PUSH_TO_REGISTRY == true
                 }
             }
             steps {
                 echo "===== Push vers Docker Hub ====="
                 script {
-                    withCredentials([string(credentialsId: 'docker-hub-token', variable: 'DOCKER_TOKEN')]) {
-                        // Tentative avec retry en cas d'erreur réseau
-                        retry(3) {
-                            sh """
-                                echo "🔐 Connexion à Docker Hub..."
-                                echo "\${DOCKER_TOKEN}" | docker login --username ${DOCKER_HUB_USERNAME} --password-stdin
-                                
-                                echo "📤 Pushing images..."
-                                
-                                # Pousser toutes les images taggées
-                                for tag in ${env.DOCKER_TAGS}; do
-                                    echo "Pushing \$tag..."
-                                    docker push \$tag
-                                    echo "✅ \$tag poussé avec succès"
-                                done
-                                
-                                # Marquer l'image avec les métadonnées
-                                docker tag ${DOCKER_HUB_REPO}:${IMAGE_TAG} ${DOCKER_HUB_REPO}:${BUILD_NUMBER}
-                                docker push ${DOCKER_HUB_REPO}:${BUILD_NUMBER}
-                                
-                                # Nettoyage
-                                docker logout
-                                echo "✅ Toutes les images ont été poussées avec succès!"
-                            """
-                        }
-                    }
-                }
-                
-                // Créer un webhook ou notifier (optionnel)
-                script {
-                    echo "🎯 URLs des images Docker Hub:"
-                    env.DOCKER_TAGS.split(',').each { tag ->
-                        def repoName = tag.split(':')[0].replace('louway/', '')
-                        def tagName = tag.split(':')[1]
-                        echo "🔗 https://hub.docker.com/r/louway/${repoName}/tags?name=${tagName}"
-                    }
-                }
-            }
-        }
-
-        stage('Deploy to Registry Alternative') {
-            when {
-                expression { 
-                    params.PUSH_TO_REGISTRY && 
-                    !credentials('docker-hub-token') 
-                }
-            }
-            steps {
-                script {
-                    echo "⚠️ Credentials Docker Hub non trouvés"
-                    echo "ℹ️ Pour configurer:"
-                    echo "1. Allez dans Jenkins → Manage Credentials"
-                    echo "2. Ajoutez un credential 'docker-hub-token' (Secret text)"
-                    echo "3. Collez votre PAT Docker Hub"
+                    // Vérifier si les credentials existent
+                    def dockerHubCredential = 'docker-hub-token'
+                    def hasCredential = false
                     
-                    // Sauvegarder l'image dans un tar (fallback)
-                    sh """
-                        echo "💾 Sauvegarde de l'image localement..."
-                        docker save -o /tmp/students-management-${IMAGE_TAG}.tar ${DOCKER_HUB_REPO}:${IMAGE_TAG}
-                        ls -lh /tmp/students-management-${IMAGE_TAG}.tar
-                    """
+                    try {
+                        withCredentials([string(credentialsId: dockerHubCredential, variable: 'TOKEN')]) {
+                            hasCredential = true
+                        }
+                    } catch (Exception e) {
+                        echo "⚠️ Credential '${dockerHubCredential}' non trouvé"
+                    }
+                    
+                    if (hasCredential) {
+                        withCredentials([string(credentialsId: dockerHubCredential, variable: 'DOCKER_TOKEN')]) {
+                            // Tentative avec retry en cas d'erreur réseau
+                            retry(3) {
+                                sh """
+                                    echo "🔐 Connexion à Docker Hub..."
+                                    echo "\${DOCKER_TOKEN}" | docker login --username ${DOCKER_HUB_USERNAME} --password-stdin
+                                    
+                                    echo "📤 Pushing images..."
+                                    
+                                    # Pousser toutes les images taggées
+                                    for tag in $(echo '${env.DOCKER_TAGS}' | tr ',' ' '); do
+                                        echo "Pushing \$tag..."
+                                        docker push \$tag
+                                        echo "✅ \$tag poussé avec succès"
+                                    done
+                                    
+                                    docker logout
+                                    echo "✅ Toutes les images ont été poussées avec succès!"
+                                """
+                            }
+                            
+                            // Créer un webhook ou notifier (optionnel)
+                            echo "🎯 URLs des images Docker Hub:"
+                            env.DOCKER_TAGS.split(',').each { tag ->
+                                def parts = tag.split(':')
+                                if (parts.length >= 2) {
+                                    def repoName = parts[0].replace('louway/', '')
+                                    def tagName = parts[1]
+                                    echo "🔗 https://hub.docker.com/r/louway/${repoName}/tags?name=${tagName}"
+                                }
+                            }
+                        }
+                    } else {
+                        echo "⚠️ Push Docker Hub non effectué - credentials manquants"
+                        echo "ℹ️ Pour configurer:"
+                        echo "1. Allez dans Jenkins → Manage Jenkins → Credentials"
+                        echo "2. Ajoutez un credential 'docker-hub-token' (Secret text)"
+                        echo "3. Collez votre PAT Docker Hub"
+                        
+                        // Sauvegarder l'image dans un tar (fallback)
+                        sh """
+                            echo "💾 Sauvegarde de l'image localement..."
+                            docker save -o /tmp/students-management-${IMAGE_TAG}.tar ${DOCKER_HUB_REPO}:${IMAGE_TAG}
+                            ls -lh /tmp/students-management-${IMAGE_TAG}.tar
+                        """
+                    }
                 }
             }
         }
 
-        stage('Notification & Cleanup') {
+        stage('Cleanup') {
             steps {
                 echo "===== Nettoyage ====="
                 script {
-                    // Nettoyer les images temporaires
                     sh """
-                        # Garder seulement les images taggées avec notre repo
+                        # Nettoyer les images intermédiaires
                         docker images --filter "dangling=true" -q | xargs -r docker rmi 2>/dev/null || true
-                        
-                        # Nettoyer les containers arrêtés
-                        docker container prune -f 2>/dev/null || true
-                        
-                        # Nettoyer les volumes non utilisés
-                        docker volume prune -f 2>/dev/null || true
-                        
-                        # Nettoyer le cache build
-                        docker builder prune -f 2>/dev/null || true
                         
                         echo "✅ Nettoyage terminé"
                     """
@@ -274,7 +267,7 @@ pipeline {
         success {
             script {
                 echo "🎉 Pipeline exécutée avec succès !"
-                echo "📦 Image Docker: ${DOCKER_HUB_REPO}:${IMAGE_TAG}"
+                echo "📦 Image Docker: ${env.DOCKER_IMAGE ?: 'N/A'}"
                 echo "🏷 Tags: ${env.DOCKER_TAGS ?: 'Aucun tag généré'}"
                 echo "🔗 Docker Hub: https://hub.docker.com/r/${DOCKER_HUB_REPO}"
                 
@@ -300,19 +293,11 @@ pipeline {
             script {
                 // Logs de débogage
                 sh '''
-                    echo "=== Logs Maven ==="
-                    tail -100 target/surefire-reports/*.txt 2>/dev/null || echo "Pas de logs de test"
+                    echo "=== Logs de build ==="
+                    find . -name "*.log" -type f | head -5 | xargs tail -50 2>/dev/null || echo "Pas de logs trouvés"
                     
-                    echo "=== Docker logs ==="
-                    docker ps -a
-                    docker images | head -20
-                '''
-                
-                // Envoyer une notification (exemple avec curl)
-                sh '''
-                    curl -X POST -H "Content-Type: application/json" \
-                    -d '{"text":"❌ Build Jenkins #${BUILD_NUMBER} a échoué"}' \
-                    ${NOTIFICATION_WEBHOOK_URL} || true
+                    echo "=== Docker status ==="
+                    docker ps -a 2>/dev/null || echo "Docker non disponible"
                 '''
             }
         }
@@ -321,17 +306,13 @@ pipeline {
             sh '''
                 docker logout 2>/dev/null || true
                 rm -f commit_hash.txt build-report.txt 2>/dev/null || true
-                
-                echo "=== Utilisation des ressources ==="
-                df -h /var/lib/docker 2>/dev/null || echo "Info Docker non disponible"
-                docker system df 2>/dev/null || echo "Docker non disponible"
             '''
             
             echo "=== Résumé du build ==="
             echo "Build: #${BUILD_NUMBER}"
             echo "Durée: ${currentBuild.durationString}"
             echo "Image: ${env.DOCKER_IMAGE ?: 'Non créée'}"
-            echo "Push Registry: ${params.PUSH_TO_REGISTRY ? 'Oui' : 'Non'}"
+            echo "Push Registry: ${params.PUSH_TO_REGISTRY ? 'Configuré' : 'Désactivé'}"
         }
     }
 }
