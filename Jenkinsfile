@@ -37,7 +37,6 @@ pipeline {
                 echo '===== Checkout du code ====='
                 git branch: 'master', url: 'https://github.com/Louaykrouna/ProjetStudentsManagement-DevOps.git'
                 
-                // Récupérer le hash du commit
                 sh 'git rev-parse --short HEAD > commit_hash.txt'
                 script {
                     env.COMMIT_HASH = readFile('commit_hash.txt').trim()
@@ -49,16 +48,12 @@ pipeline {
         stage('Initialize Variables') {
             steps {
                 script {
-                    // Déterminer la branche
                     env.BRANCH_NAME = env.GIT_BRANCH ? env.GIT_BRANCH.replace('origin/', '') : 'master'
                     env.IS_MASTER_BRANCH = (env.BRANCH_NAME == 'master')
                     env.IS_DEVELOP_BRANCH = (env.BRANCH_NAME == 'develop')
                     
                     echo "Branche détectée: ${env.BRANCH_NAME}"
-                    echo "Is Master: ${env.IS_MASTER_BRANCH}"
-                    echo "Is Develop: ${env.IS_DEVELOP_BRANCH}"
                     
-                    // Créer un tag avec timestamp
                     def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
                     env.TIMESTAMP_TAG = "build-${BUILD_NUMBER}-${timestamp}"
                 }
@@ -75,7 +70,6 @@ pipeline {
                         echo "✅ Build Maven réussi"
                     """
                     
-                    // Exécuter les tests uniquement si demandé
                     if (!params.SKIP_TESTS) {
                         sh '''
                             echo "===== Exécution des tests ====="
@@ -94,45 +88,38 @@ pipeline {
                 sh '''
                     mvn package -DskipTests
                     
-                    # Vérifier que le JAR a été créé
                     echo "=== Fichiers générés ==="
                     ls -la target/*.jar
                     echo "=== Taille du JAR ==="
                     du -h target/*.jar | tail -1
                 '''
                 
-                // Archive le JAR
                 archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                echo "===== Construction de l\'image Docker ====="
+                echo "===== Construction de l'image Docker ====="
                 script {
-                    // Préparer les tags
                     def tags = [
                         "${DOCKER_HUB_REPO}:${IMAGE_TAG}",
                         "${DOCKER_HUB_REPO}:${env.TIMESTAMP_TAG}",
                         "${DOCKER_HUB_REPO}:commit-${env.COMMIT_HASH}"
                     ]
                     
-                    // Ajouter le tag latest si c'est la branche master
                     if (env.IS_MASTER_BRANCH.toString() == 'true') {
                         tags.add("${DOCKER_HUB_REPO}:latest")
                         echo "✅ Ajout du tag 'latest' (branche master)"
                     }
                     
-                    // Ajouter le tag develop si c'est la branche develop
                     if (env.IS_DEVELOP_BRANCH.toString() == 'true') {
                         tags.add("${DOCKER_HUB_REPO}:develop")
                         echo "✅ Ajout du tag 'develop' (branche develop)"
                     }
                     
-                    // Afficher tous les tags
                     echo "Tags à construire: ${tags.join(', ')}"
                     
-                    // Construire avec tous les tags
                     def dockerBuildCmd = "docker build"
                     tags.each { tag ->
                         dockerBuildCmd += " -t ${tag}"
@@ -143,7 +130,7 @@ pipeline {
                         echo "=== Informations Docker ==="
                         docker version
                         
-                        echo "=== Construction de l\'image ==="
+                        echo "=== Construction de l'image ==="
                         ${dockerBuildCmd}
                         
                         echo "=== Images créées ==="
@@ -152,7 +139,6 @@ pipeline {
                         echo "✅ Images Docker construites avec succès"
                     """
                     
-                    // Sauvegarder les tags dans l'environnement
                     env.DOCKER_TAGS = tags.join(',')
                     env.DOCKER_IMAGE = "${DOCKER_HUB_REPO}:${IMAGE_TAG}"
                 }
@@ -168,43 +154,43 @@ pipeline {
             steps {
                 echo "===== Push vers Docker Hub ====="
                 script {
-                    // Vérifier si les credentials existent
                     def dockerHubCredential = 'docker-hub-token'
                     
-                    // Tentative de connexion avec les credentials
                     withCredentials([string(credentialsId: dockerHubCredential, variable: 'DOCKER_TOKEN')]) {
-                        // Tentative avec retry en cas d'erreur réseau
                         retry(3) {
                             sh """
-                                set +x  # Désactiver le debug pour le token
+                                set +x
                                 echo "🔐 Connexion à Docker Hub..."
                                 echo "\${DOCKER_TOKEN}" | docker login --username ${DOCKER_HUB_USERNAME} --password-stdin
-                                set -x  # Réactiver le debug
+                                set -x
                                 
                                 echo "📤 Pushing images..."
-                                
-                                # Pousser toutes les images taggées
-                                for tag in ${env.DOCKER_TAGS}; do
-                                    echo "Pushing \${tag}..."
-                                    docker push \${tag}
-                                    echo "✅ \${tag} poussé avec succès"
-                                done
-                                
+                            """
+                            
+                            // CORRECTION ICI : Pousser chaque tag individuellement
+                            def tags = env.DOCKER_TAGS.split(',')
+                            tags.each { tag ->
+                                sh """
+                                    echo "Pushing ${tag}..."
+                                    docker push ${tag}
+                                    echo "✅ ${tag} poussé avec succès"
+                                """
+                            }
+                            
+                            sh """
                                 docker logout
                                 echo "✅ Toutes les images ont été poussées avec succès!"
                             """
                         }
                         
-                        // Afficher les URLs Docker Hub
                         echo "🎯 URLs des images Docker Hub:"
-                        script {
-                            env.DOCKER_TAGS.split(',').each { tag ->
-                                def parts = tag.split(':')
-                                if (parts.length >= 2) {
-                                    def repoName = parts[0].replace('louway/', '')
-                                    def tagName = parts[1]
-                                    echo "🔗 https://hub.docker.com/r/louway/${repoName}/tags?name=${tagName}"
-                                }
+                        def tags = env.DOCKER_TAGS.split(',')
+                        tags.each { tag ->
+                            def parts = tag.split(':')
+                            if (parts.length >= 2) {
+                                def repoName = parts[0].replace("${DOCKER_HUB_USERNAME}/", '')
+                                def tagName = parts[1]
+                                echo "🔗 https://hub.docker.com/r/${DOCKER_HUB_USERNAME}/${repoName}/tags?name=${tagName}"
                             }
                         }
                     }
@@ -217,9 +203,7 @@ pipeline {
                 echo "===== Nettoyage ====="
                 script {
                     sh """
-                        # Nettoyer les images intermédiaires
                         docker images --filter "dangling=true" -q | xargs -r docker rmi 2>/dev/null || true
-                        
                         echo "✅ Nettoyage terminé"
                     """
                 }
@@ -235,7 +219,6 @@ pipeline {
                 echo "🏷 Tags: ${env.DOCKER_TAGS ?: 'Aucun tag généré'}"
                 echo "🔗 Docker Hub: https://hub.docker.com/r/${DOCKER_HUB_REPO}"
                 
-                // Créer un fichier de rapport
                 writeFile file: 'build-report.txt', text: """
                 ===== RAPPORT DE BUILD =====
                 Date: ${new Date()}
@@ -248,7 +231,6 @@ pipeline {
                 Statut: SUCCÈS
                 """
                 
-                // Archive le rapport
                 archiveArtifacts artifacts: 'build-report.txt', fingerprint: true
             }
         }
@@ -256,7 +238,6 @@ pipeline {
             script {
                 echo '❌ Pipeline échouée'
                 
-                // Logs de débogage
                 sh '''
                     echo "=== Logs de build ==="
                     find . -name "*.log" -type f | head -5 | xargs tail -50 2>/dev/null || echo "Pas de logs trouvés"
@@ -267,7 +248,6 @@ pipeline {
             }
         }
         always {
-            // Nettoyage final
             sh '''
                 docker logout 2>/dev/null || true
                 rm -f commit_hash.txt build-report.txt 2>/dev/null || true
