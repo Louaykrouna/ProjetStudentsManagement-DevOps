@@ -99,51 +99,44 @@ pipeline {
         }
 
         stage('Build Docker Image') {
-            steps {
-                echo "===== Construction de l'image Docker ====="
-                script {
-                    def tags = [
-                        "${DOCKER_HUB_REPO}:${IMAGE_TAG}",
-                        "${DOCKER_HUB_REPO}:${env.TIMESTAMP_TAG}",
-                        "${DOCKER_HUB_REPO}:commit-${env.COMMIT_HASH}"
-                    ]
-                    
-                    if (env.IS_MASTER_BRANCH.toString() == 'true') {
-                        tags.add("${DOCKER_HUB_REPO}:latest")
-                        echo "✅ Ajout du tag 'latest' (branche master)"
-                    }
-                    
-                    if (env.IS_DEVELOP_BRANCH.toString() == 'true') {
-                        tags.add("${DOCKER_HUB_REPO}:develop")
-                        echo "✅ Ajout du tag 'develop' (branche develop)"
-                    }
-                    
-                    echo "Tags à construire: ${tags.join(', ')}"
-                    
-                    def dockerBuildCmd = "docker build"
-                    tags.each { tag ->
-                        dockerBuildCmd += " -t ${tag}"
-                    }
-                    dockerBuildCmd += " ."
-                    
-                    sh """
-                        echo "=== Informations Docker ==="
-                        docker version
-                        
-                        echo "=== Construction de l'image ==="
-                        ${dockerBuildCmd}
-                        
-                        echo "=== Images créées ==="
-                        docker images ${DOCKER_HUB_REPO}
-                        
-                        echo "✅ Images Docker construites avec succès"
-                    """
-                    
-                    env.DOCKER_TAGS = tags.join(',')
-                    env.DOCKER_IMAGE = "${DOCKER_HUB_REPO}:${IMAGE_TAG}"
-                }
+    steps {
+        echo "===== Construction de l'image Docker ====="
+        script {
+            def tags = [
+                "${DOCKER_HUB_REPO}:${IMAGE_TAG}",
+                "${DOCKER_HUB_REPO}:commit-${env.COMMIT_HASH}"
+            ]
+            
+            if (env.IS_MASTER_BRANCH.toString() == 'true') {
+                tags.add("${DOCKER_HUB_REPO}:latest")
             }
+            
+            echo "Tags à construire: ${tags.join(', ')}"
+            
+            def dockerBuildCmd = "DOCKER_BUILDKIT=0 docker build"
+            tags.each { tag ->
+                dockerBuildCmd += " -t ${tag}"
+            }
+            dockerBuildCmd += " ."
+            
+            sh """
+                echo "=== Informations Docker ==="
+                docker version
+                
+                echo "=== Construction de l'image ==="
+                ${dockerBuildCmd}
+                
+                echo "=== Images créées ==="
+                docker images ${DOCKER_HUB_REPO}
+                
+                echo "✅ Images Docker construites"
+            """
+            
+            env.DOCKER_TAGS = tags.join(',')
+            env.DOCKER_IMAGE = "${DOCKER_HUB_REPO}:${IMAGE_TAG}"
         }
+    }
+}
 
         stage('Push to Docker Hub') {
             when {
